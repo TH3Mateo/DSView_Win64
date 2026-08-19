@@ -16,6 +16,9 @@ The DSView software is in a usable state and has official tarball releases. Howe
 - [kickstarter.com](https://www.kickstarter.com/projects/dreamsourcelab/dslogic-multifunction-instruments-for-everyone)
 - [sigrok.org](https://sigrok.org)
 
+# Important disclaimer
+I am not taking credit for the DSView software or the changes made to it in this repository. It has been vibecoded in 100% and I have not written a single line of code for this project. Nevertheless, I am providing this repository as a convenience for those who might be looking for something like this already done by someone else.
+
 # Building on Windows
 
 The Windows build uses the **MinGW-w64** toolchain from [MSYS2](https://www.msys2.org).
