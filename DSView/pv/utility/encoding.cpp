@@ -28,7 +28,7 @@
 #include <QTextCodec>
 #endif 
 
-#ifdef _WIN32
+#if defined(_WIN32) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <QTextCodec>
 #endif
 
@@ -37,8 +37,9 @@ namespace encoding{
 
     void init()
     {
-#ifdef _WIN32
+#if defined(_WIN32) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
      QTextCodec::setCodecForLocale(QTextCodec::codecForName("UTF-8"));
+     // Qt6 always uses UTF-8 for QString <-> QByteArray, nothing to do here.
 #endif
     }
 

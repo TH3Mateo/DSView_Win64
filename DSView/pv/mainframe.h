@@ -31,17 +31,23 @@
 #include <QRect>
 
 #ifdef _WIN32
-#include <QWinTaskbarButton>
-#include <QWinTaskbarProgress>
+#include <windows.h>
+// The taskbar progress indicator is driven through the native ITaskbarList3
+// interface. QtWinExtras (QWinTaskbarButton) was Qt5 only and was removed in
+// Qt6, so it can not be used here.
+struct ITaskbarList3;
 #endif
 
 #include "toolbars/titlebar.h"
 
 
-#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+#ifndef DSV_MESSAGE_RESULT_PTR_DEFINED
+#define DSV_MESSAGE_RESULT_PTR_DEFINED
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 typedef qintptr *MESSAGE_RESULT_PTR;
 #else
 typedef long *MESSAGE_RESULT_PTR;
+#endif
 #endif
 
 namespace pv {
@@ -118,6 +124,7 @@ protected:
 
 #ifdef _WIN32
     void showEvent(QShowEvent *event);
+    HWND taskbarWindowHandle();
     bool nativeEvent(const QByteArray &eventType, void *message, MESSAGE_RESULT_PTR result) override;
 #endif
 
@@ -174,8 +181,7 @@ private:
     bool    _freezing; 
     // Taskbar Progress Effert for Win7 and Above
 #ifdef _WIN32
-    QWinTaskbarButton *_taskBtn;
-    QWinTaskbarProgress *_taskPrg;
+    ITaskbarList3 *_taskBar;
 #endif
 
     bool    _is_win32_parent_window;

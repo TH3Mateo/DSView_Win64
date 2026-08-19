@@ -63,13 +63,28 @@ Mac:
   brew install pkg-config
 
 
+Windows (MSYS2 / MinGW-w64):
+  Windows builds use the MinGW-w64 toolchain from https://www.msys2.org.
+  MSVC is not supported (the C libraries need unistd.h / pthread.h).
+
+  Open the "MSYS2 MINGW64" shell and run:
+   $ pacman -Syu    (twice, reopening the shell in between)
+   $ pacman -S --needed git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake        mingw-w64-x86_64-ninja mingw-w64-x86_64-pkgconf mingw-w64-x86_64-qt6-base        mingw-w64-x86_64-qt6-svg mingw-w64-x86_64-qt6-tools mingw-w64-x86_64-glib2        mingw-w64-x86_64-zlib mingw-w64-x86_64-libusb mingw-w64-x86_64-fftw        mingw-w64-x86_64-boost mingw-w64-x86_64-python
+
+  See README.md, section "Building on Windows", for the full walkthrough.
+
+
 Step2: Get the DSView source code
  $ git clone https://github.com/DreamSourceLab/DSView
 
 Step3: Building
- $ cmake .
- $ make 
- $ sudo make install
+ $ cmake -S . -B build
+ $ cmake --build build --parallel
+ $ sudo cmake --install build
+
+ Building in the source directory ("cmake ." followed by "make") still works,
+ but an out of source build keeps the tree clean and avoids a stale
+ CMakeCache.txt from another machine breaking the configure step.
 
 See the following wiki page for more (OS-specific) instructions:
  http://sigrok.org/wiki/Building

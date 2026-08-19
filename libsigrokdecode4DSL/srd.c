@@ -24,6 +24,67 @@
 #include <glib.h>
 #include "log.h"
 
+#ifdef _WIN32
+#include <windows.h>
+
+/*
+ * Since Python 3.8 an extension module (.pyd) on Windows resolves its own
+ * dependencies through the "DLL directories" list instead of %PATH%. When
+ * Python is embedded in DSView.exe that list only holds the directory of the
+ * executable, so a module such as _ctypes fails to find libffi and every
+ * decoder importing it (ir_irmp) fails to load.
+ *
+ * Register the directory holding the Python runtime DLLs, derived from
+ * sys.prefix: "<prefix>/bin" for MSYS2/MinGW, "<prefix>/DLLs" for the
+ * python.org layout.
+ */
+static void srd_win32_add_python_dll_directory(void)
+{
+	static const char *const subdirs[] = { "bin", "DLLs" };
+	PyObject *prefix_obj, *prefix_bytes;
+	const char *prefix;
+	size_t i;
+
+	/* Borrowed reference, no need to decref. */
+	prefix_obj = PySys_GetObject("prefix");
+	if (prefix_obj == NULL || !PyUnicode_Check(prefix_obj))
+		return;
+
+	prefix_bytes = PyUnicode_AsUTF8String(prefix_obj);
+	if (prefix_bytes == NULL) {
+		PyErr_Clear();
+		return;
+	}
+
+	prefix = PyBytes_AsString(prefix_bytes);
+	if (prefix == NULL) {
+		PyErr_Clear();
+		Py_DECREF(prefix_bytes);
+		return;
+	}
+
+	for (i = 0; i < sizeof(subdirs) / sizeof(subdirs[0]); i++) {
+		char *dir;
+		gunichar2 *wdir;
+
+		dir = g_build_filename(prefix, subdirs[i], NULL);
+
+		if (g_file_test(dir, G_FILE_TEST_IS_DIR)) {
+			wdir = g_utf8_to_utf16(dir, -1, NULL, NULL, NULL);
+			if (wdir != NULL) {
+				if (AddDllDirectory((PCWSTR)wdir) != NULL)
+					srd_dbg("Added DLL search directory '%s'.", dir);
+				g_free(wdir);
+			}
+		}
+
+		g_free(dir);
+	}
+
+	Py_DECREF(prefix_bytes);
+}
+#endif
+
 /** @cond PRIVATE */
 
 /* Python module search paths */
@@ -206,6 +267,10 @@ SRD_API int srd_init(const char *path)
 
 	/* Initialize the Python interpreter. */
     Py_InitializeEx(0); 
+
+#ifdef _WIN32
+	srd_win32_add_python_dll_directory();
+#endif
 
 #ifdef DECODERS_DIR
 	/* Hardcoded decoders install location, if defined. */

@@ -19,9 +19,26 @@
 ## along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ##
 
-cmake_minimum_required(VERSION 2.8.6)
+# CMake >= 4.0 refuses to run projects that ask for compatibility with
+# CMake < 3.5, so the old "2.8.6" here made configuration fail outright on any
+# up to date toolchain (which is what most Windows users install).
+cmake_minimum_required(VERSION 3.16)
 
 project(DSView)
+
+# CMake 3.30+ deprecates the bundled FindBoost module. DSView only needs the
+# header only parts of boost, so keep using the module when it is available.
+if(POLICY CMP0167)
+	cmake_policy(SET CMP0167 OLD)
+endif()
+
+if(MSVC)
+	message(FATAL_ERROR
+		"DSView can not be built with MSVC: libsigrok4DSL and the bundled "
+		"minizip/xlog code rely on POSIX headers (unistd.h, pthread.h) and on "
+		"GCC extensions. On Windows use the MSYS2 MinGW-w64 toolchain, see "
+		"README.md -> 'Building on Windows'.")
+endif()
 
 #===============================================================================
 #= Config Header
@@ -75,7 +92,7 @@ if(WIN32)
 endif()
 
 if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING
+  set(CMAKE_BUILD_TYPE Release CACHE STRING
       "Choose the type of build, options are: None Debug Release RelWithDebInfo MinSizeRel."
       FORCE)
 endif()
@@ -101,13 +118,33 @@ endif()
 
 message("----- glib-2.0:")
 message(STATUS "	 includes:" ${GLIB_INCLUDE_DIRS})
-message(STATUS "	 libraries:" ${GLIB_LIBDIR}/libglib-2.0.*)
+message(STATUS "	 libraries:" ${GLIB_LIBRARIES})
 include_directories(${GLIB_INCLUDE_DIRS})
-link_directories(${GLIB_LIBDIR})
+link_directories(${GLIB_LIBRARY_DIRS})
 
 #===============================================================================
 #= python3
 #-------------------------------------------------------------------------------
+
+# On MinGW, find_package(Python3) happily picks up a CPython built with MSVC
+# (the python.org or Microsoft Store install), whose import library can not be
+# linked by GCC. Ask pkg-config first, which only sees the toolchain's python.
+if(MINGW)
+	pkg_search_module(PYTHON3 python3)
+
+	if(PYTHON3_FOUND)
+		message("----- python3 (pkg-config):")
+		message(STATUS "	 includes:" ${PYTHON3_INCLUDE_DIRS})
+		message(STATUS "	 libraries:" ${PYTHON3_LIBRARIES})
+		include_directories(${PYTHON3_INCLUDE_DIRS})
+		link_directories(${PYTHON3_LIBRARY_DIRS})
+		set(PY_LIB ${PYTHON3_LIBRARIES})
+	else()
+		message(FATAL_ERROR
+			"Please install mingw-w64-x86_64-python (the MSVC builds of "
+			"CPython can not be linked by MinGW).")
+	endif()
+else()
 
 find_package(Python3 COMPONENTS Development QUIET)
 
@@ -129,6 +166,8 @@ else()
      else()
      	message(FATAL_ERROR  "Please install lib python3!")
      endif()
+endif()
+
 endif()
   
 #===============================================================================
@@ -283,6 +322,7 @@ set(DSView_SOURCES
     DSView/pv/data/decode/row.cpp
     DSView/pv/data/decode/decoder.cpp
     DSView/pv/data/decode/annotation.cpp
+    DSView/pv/data/decode/metadata.cpp
     DSView/pv/view/decodetrace.cpp
     DSView/pv/prop/binding/decoderoptions.cpp
     DSView/pv/widgets/fakelineedit.cpp
@@ -355,6 +395,15 @@ set(DSView_SOURCES
     DSView/pv/ui/xprogressbar.cpp
     DSView/pv/utility/formatting.cpp
 )
+
+# The frameless native window and its drop shadow are Windows only and were
+# never listed here, so linking always failed with undefined references.
+if(WIN32)
+    list(APPEND DSView_SOURCES
+        DSView/pv/winnativewidget.cpp
+        DSView/pv/winshadow.cpp
+    )
+endif()
 
 set(DSView_HEADERS
     DSView/mystyle.h
@@ -449,6 +498,13 @@ set(DSView_HEADERS
     DSView/pv/ui/fn.h
     DSView/pv/ui/xtoolbutton.h
 )
+
+if(WIN32)
+    # winshadow.h declares Q_OBJECT, so it has to be moc'ed.
+    list(APPEND DSView_HEADERS
+        DSView/pv/winshadow.h
+    )
+endif()
  
 #===============================================================================
 #= libsigrok4DSL source
@@ -551,8 +607,12 @@ set(DSView_RESOURCES
 
 if(WIN32)
 	# Use the DSView icon for the DSView.exe executable.
-	set(CMAKE_RC_COMPILE_OBJECT "${CMAKE_RC_COMPILER} -O coff -I${CMAKE_CURRENT_SOURCE_DIR} <SOURCE> <OBJECT>")
+	# NOTE: do not override CMAKE_RC_COMPILE_OBJECT here. It used to be set
+	# before enable_language(RC), so ${CMAKE_RC_COMPILER} was still empty and
+	# the generated rule started with "-O coff", which is not a program.
 	enable_language(RC)
+	# windres resolves "logo-win.ico" relative to its include path.
+	set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -I\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 	# app icon
         list(APPEND DSView_SOURCES applogo.rc)
 endif()
@@ -571,14 +631,33 @@ endif()
 
 
 add_definitions(${QT_DEFINITIONS})
-add_definitions(-Wall -Wextra -Wno-return-type -Wno-ignored-qualifiers)
+
+# Warning/optimisation flags must never reach the RC compiler: windres reads
+# "-O" as its output format option and dies on "-O3". Scope them to C/C++.
+add_compile_options(
+	"$<$<COMPILE_LANGUAGE:C,CXX>:-Wall>"
+	"$<$<COMPILE_LANGUAGE:C,CXX>:-Wextra>"
+	"$<$<COMPILE_LANGUAGE:C,CXX>:-Wno-return-type>"
+	"$<$<COMPILE_LANGUAGE:C,CXX>:-Wno-ignored-qualifiers>"
+)
 
 if(NOT DISABLE_WERROR)
-        add_definitions(-Werror)
+	add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-Werror>")
 endif()
 
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
+# Qt6 requires C++17. Set the standard through CMake instead of appending
+# -std= by hand, so it is not lost when other flags are set later on.
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+if(WIN32)
+	# Qt and the native window code expect the wide character Win32 API.
+	add_definitions(-DUNICODE -D_UNICODE)
+	# Some translation units (mainframe.cpp, winnativewidget.cpp) get large.
+	add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wa,-mbig-obj>")
+endif()
 
 
 include_directories(
@@ -598,11 +677,11 @@ endif()
 #===============================================================================
 #= Release flags
 #-------------------------------------------------------------------------------
-set(CMAKE_CXX_FLAGS "-Wall -Wextra")
-set(CMAKE_BUILD_TYPE Release)
+# NOTE: CMAKE_CXX_FLAGS used to be *assigned* here, which threw away everything
+# collected above (Qt's compile flags among them). Only append.
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-add_compile_options(-O3)
+set(CMAKE_C_FLAGS_RELEASE "-O3")
 
 #===============================================================================
 #= Linker Configuration
@@ -610,8 +689,8 @@ add_compile_options(-O3)
 
 
 set(DSVIEW_LINK_LIBS
-	-lz
-	-lglib-2.0
+	${ZLIB_LIBRARIES}
+	${GLIB_LIBRARIES}
 	${CMAKE_THREAD_LIBS_INIT}
 	${QT_LIBRARIES}
 	${LIBUSB_1_LIBRARIES}
@@ -619,13 +698,22 @@ set(DSVIEW_LINK_LIBS
 	${PY_LIB}
 )
 
+if(WIN32)
+	# Needed by winnativewidget.cpp / winshadow.cpp / the taskbar progress.
+	list(APPEND DSVIEW_LINK_LIBS
+		dwmapi
+		ole32
+		uuid
+		user32
+		gdi32
+		shell32
+		winmm
+	)
+endif()
+
 if(STATIC_PKGDEPS_LIBS)
 	link_directories(${PKGDEPS_STATIC_LIBRARY_DIRS})
 	list(APPEND DSVIEW_LINK_LIBS ${PKGDEPS_STATIC_LIBRARIES})
-if(WIN32)
-	# Workaround for a MinGW linking issue.
-	list(APPEND PULSEVIEW_LINK_LIBS "-llzma -llcms2")
-endif()
 else()
 	link_directories(${PKGDEPS_LIBRARY_DIRS})
 	list(APPEND DSVIEW_LINK_LIBS ${PKGDEPS_LIBRARIES})
@@ -644,8 +732,9 @@ add_executable(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME} ${DSVIEW_LINK_LIBS})
 
 if(WIN32)
-# Pass -mwindows so that no "DOS box" will open when PulseView is started.
-set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "-mwindows")
+	# WIN32_EXECUTABLE makes CMake pass -mwindows (MinGW), so no console
+	# window opens next to the application.
+	set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
 if(ENABLE_COTIRE)
@@ -653,14 +742,55 @@ if(ENABLE_COTIRE)
 	cotire(${PROJECT_NAME})
 endif()
 
-message(STATUS "Output dir: ${CMAKE_CURRENT_SOURCE_DIR}/build.dir")
-set(EXECUTABLE_OUTPUT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/build.dir")
+set(DSVIEW_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build.dir")
+message(STATUS "Output dir: ${DSVIEW_OUTPUT_DIR}")
+set(EXECUTABLE_OUTPUT_PATH "${DSVIEW_OUTPUT_DIR}")
+set_target_properties(${PROJECT_NAME} PROPERTIES
+	RUNTIME_OUTPUT_DIRECTORY "${DSVIEW_OUTPUT_DIR}"
+	RUNTIME_OUTPUT_DIRECTORY_DEBUG "${DSVIEW_OUTPUT_DIR}"
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE "${DSVIEW_OUTPUT_DIR}"
+	RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${DSVIEW_OUTPUT_DIR}"
+	RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${DSVIEW_OUTPUT_DIR}"
+)
+
+if(WIN32)
+	# On Windows GetAppDataDir() is simply the directory of the executable,
+	# so the runtime data has to sit next to DSView.exe or the application
+	# starts without decoders, firmware and translations.
+	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_directory
+			"${CMAKE_CURRENT_SOURCE_DIR}/libsigrokdecode4DSL/decoders"
+			"${DSVIEW_OUTPUT_DIR}/decoders"
+		COMMAND ${CMAKE_COMMAND} -E copy_directory
+			"${CMAKE_CURRENT_SOURCE_DIR}/DSView/res"
+			"${DSVIEW_OUTPUT_DIR}/res"
+		COMMAND ${CMAKE_COMMAND} -E copy_directory
+			"${CMAKE_CURRENT_SOURCE_DIR}/DSView/demo"
+			"${DSVIEW_OUTPUT_DIR}/demo"
+		COMMAND ${CMAKE_COMMAND} -E copy_directory
+			"${CMAKE_CURRENT_SOURCE_DIR}/lang"
+			"${DSVIEW_OUTPUT_DIR}/lang"
+		COMMENT "Copying runtime data next to DSView.exe"
+		VERBATIM
+	)
+endif()
 
 #===============================================================================
 #= Installation
 #-------------------------------------------------------------------------------
 
 # Install the executable.
+if(WIN32)
+	# GetAppDataDir() returns the directory of the executable on Windows, so
+	# the whole payload is installed flat next to DSView.exe.
+	install(TARGETS ${PROJECT_NAME} DESTINATION .)
+	install(DIRECTORY DSView/res DESTINATION .)
+	install(DIRECTORY DSView/demo DESTINATION .)
+	install(DIRECTORY libsigrokdecode4DSL/decoders DESTINATION .)
+	install(DIRECTORY lang DESTINATION .)
+	install(FILES DSView/icons/logo.svg DESTINATION . RENAME logo.svg)
+	install(FILES NEWS25 NEWS31 ug25.pdf ug31.pdf DESTINATION .)
+else()
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 install(DIRECTORY DSView/res DESTINATION share/DSView)
 install(DIRECTORY DSView/demo DESTINATION share/DSView)
@@ -690,6 +820,7 @@ install(FILES ug31.pdf DESTINATION share/DSView RENAME ug31.pdf)
 
 install(DIRECTORY libsigrokdecode4DSL/decoders DESTINATION share/libsigrokdecode4DSL)
 install(DIRECTORY lang DESTINATION share/DSView)
+endif()
 
 #===============================================================================
 #= Packaging (handled by CPack)

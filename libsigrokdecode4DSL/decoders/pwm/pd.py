@@ -69,6 +69,12 @@ class Decoder(srd.Decoder):
         self.out_average = \
             self.register(srd.OUTPUT_META,
                           meta=(float, 'Average', 'PWM base (cycle) frequency'))
+        self.out_duty = \
+            self.register(srd.OUTPUT_META,
+                          meta=(float, 'Duty cycle', 'Duty cycle in percent'))
+        self.out_period = \
+            self.register(srd.OUTPUT_META,
+                          meta=(float, 'Period', 'Period in seconds'))
 
     def putx(self, data):
         self.put(self.ss_block, self.es_block, self.out_ann, data)
@@ -126,6 +132,7 @@ class Decoder(srd.Decoder):
             # Report the duty cycle in percent.
             percent = float(ratio * 100)
             self.putx([0, ['%f%%' % percent]])
+            self.put(self.ss_block, self.es_block, self.out_duty, percent)
 
             # Report the duty cycle in the binary output.
             self.putb([0, bytes([int(ratio * 256)])])
@@ -133,6 +140,7 @@ class Decoder(srd.Decoder):
             # Report the period in units of time.
             period_t = float(period / self.samplerate)
             self.putp(period_t)
+            self.put(self.ss_block, self.es_block, self.out_period, period_t)
 
             # Update and report the new duty cycle average.
             num_cycles += 1

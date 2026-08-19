@@ -541,7 +541,12 @@ namespace pv
 
 #ifdef _WIN32 
     #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-        QPixmap pixmap = QGuiApplication::primaryScreen()->grabWindow(QApplication::desktop->winId(), x, y, w, h);
+        // QScreen::grabWindow(0) grabs the whole desktop, so the frame window
+        // region (including the native border) can be cut out of it.
+        QScreen *screen = QGuiApplication::screenAt(QPoint(x, y));
+        if (screen == NULL)
+            screen = QGuiApplication::primaryScreen();
+        QPixmap pixmap = screen->grabWindow(0, x, y, w, h);
     #else
         QPixmap pixmap = QPixmap::grabWidget(parentWidget());
     #endif

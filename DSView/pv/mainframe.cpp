@@ -63,6 +63,7 @@
 
 #ifdef _WIN32
 #include "winnativewidget.h"
+#include <shobjidl.h>
 #endif
 
 namespace pv {
@@ -97,7 +98,7 @@ MainFrame::MainFrame()
 #ifdef _WIN32
     setWindowFlags(Qt::FramelessWindowHint);
     _is_win32_parent_window = true;
-    _taskBtn = NULL;
+    _taskBar = NULL;
     isWin32 = true;
 #else
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowSystemMenuHint);
@@ -179,7 +180,6 @@ MainFrame::MainFrame()
     }
 
 #ifdef _WIN32
-    _taskBtn = new QWinTaskbarButton(this);
 	connect(_mainWindow, SIGNAL(prgRate(int)), this, SLOT(setTaskbarProgress(int)));
 #endif
 
@@ -302,6 +302,11 @@ void MainFrame::closeEvent(QCloseEvent *event)
     if (_mainWindow->able_to_close()){
         
 #ifdef _WIN32
+        if (_taskBar != NULL){
+            _taskBar->Release();
+            _taskBar = NULL;
+        }
+
         if (_parentNativeWidget != NULL){
             _parentNativeWidget->SetChildWidget(NULL);
             setVisible(false);
@@ -1022,22 +1027,45 @@ void MainFrame::ReadSettings()
 void MainFrame::showEvent(QShowEvent *event)
 {
     // Taskbar Progress Effert for Win7 and Above
-    if (_taskBtn && _taskBtn->window() == NULL) {
-        _taskBtn->setWindow(windowHandle());
-        _taskPrg = _taskBtn->progress();
+    if (_taskBar == NULL) {
+        HRESULT hr = CoCreateInstance(CLSID_TaskbarList, NULL, CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(&_taskBar));
+        if (FAILED(hr) || _taskBar == NULL) {
+            _taskBar = NULL;
+        }
+        else if (FAILED(_taskBar->HrInit())) {
+            _taskBar->Release();
+            _taskBar = NULL;
+        }
     }
     event->accept();
+}
+
+HWND MainFrame::taskbarWindowHandle()
+{
+    // The taskbar entry belongs to the top level native window, which is the
+    // parent frame window when the native title bar is in use.
+    if (_parentNativeWidget != NULL){
+        return _parentNativeWidget->Handle();
+    }
+    return reinterpret_cast<HWND>(winId());
 }
 #endif
 
 void MainFrame::setTaskbarProgress(int progress)
 {
 #ifdef _WIN32
+    if (_taskBar == NULL){
+        return;
+    }
+
+    HWND hwnd = taskbarWindowHandle();
+
     if (progress > 0) {
-        _taskPrg->setVisible(true);
-        _taskPrg->setValue(progress);
+        _taskBar->SetProgressState(hwnd, TBPF_NORMAL);
+        _taskBar->SetProgressValue(hwnd, (ULONGLONG)progress, 100);
     } else {
-        _taskPrg->setVisible(false);
+        _taskBar->SetProgressState(hwnd, TBPF_NOPROGRESS);
     }
 #else
 	(void)progress;

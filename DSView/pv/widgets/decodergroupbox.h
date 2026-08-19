@@ -28,6 +28,9 @@
 #include <QGridLayout>
 #include <QFont>
 #include <QWidget>
+#include <vector>
+
+class DsComboBox;
 
 namespace pv {
 
@@ -35,6 +38,7 @@ namespace data{
 class DecoderStack;
 namespace decode{
 class Decoder;
+class MetaData;
 }
 }
 
@@ -62,7 +66,15 @@ signals:
 
 private slots:
     void tog_icon();
+    void tog_meta_icon();
+    void on_meta_interp_changed(int index);
     void on_del_stack();
+
+private:
+    // Adds one row per numeric measurement stream the decoder has produced,
+    // with a waveform on/off toggle and an interpolation selector.
+    void add_meta_rows(QWidget *parent_widget, QFont font, int &grid_row,
+        const QString &iconPath);
 
 private:
     QWidget *_widget;
@@ -75,6 +87,11 @@ private:
     QPushButton *_del_button;
     QPushButton *_show_button;
     std::list <QPushButton *> _row_show_button;
+
+    // Meta streams shown in this box, in the same order as their buttons.
+    std::vector<pv::data::decode::MetaData*> _meta_streams;
+    std::vector<DsComboBox*> _meta_interp_combo;
+
     int _row_num;
     
 public:

@@ -69,6 +69,8 @@ const QColor DecodeTrace::DecodeColours[4] = {
 const QColor DecodeTrace::ErrorBgColour = QColor(0xEF, 0x29, 0x29);
 const QColor DecodeTrace::NoDecodeColour = QColor(0x88, 0x8A, 0x85);
 
+const int DecodeTrace::MetaRowUnits;
+
 const int DecodeTrace::ArrowSize = 4;
 const double DecodeTrace::EndCapWidth = 5;
 const int DecodeTrace::DrawPadding = 100;
@@ -187,9 +189,13 @@ void DecodeTrace::paint_back(QPainter &p, int left, int right, QColor fore, QCol
 
     // --draw headings
     const int row_height = _view->get_signalHeight();
+    int row_top = get_y() - _totalHeight * 0.5;
+
     for (size_t i = 0; i < _cur_row_headings.size(); i++)
     {
-        const int y = i * row_height + get_y() - _totalHeight * 0.5;
+        const int y = row_top;
+
+        row_top += row_height * (i < _cur_row_units.size() ? _cur_row_units[i] : 1);
 
         p.setPen(QPen(Qt::NoPen));
         p.setBrush(QApplication::palette().brush(QPalette::WindowText));
@@ -229,6 +235,7 @@ void DecodeTrace::paint_mid(QPainter &p, int left, int right, QColor fore, QColo
     double samplerate = _decoder_stack->samplerate();
 
     _cur_row_headings.clear();
+    _cur_row_units.clear();
 
     // Show sample rate as 1Hz when it is unknown
     if (samplerate == 0.0)
@@ -301,13 +308,35 @@ void DecodeTrace::paint_mid(QPainter &p, int left, int right, QColor fore, QColo
 
                         y += annotation_height;
                         _cur_row_headings.push_back(row.title());
+                        _cur_row_units.push_back(1);
                     }
                 }
+            }
+
+            // Numeric measurement streams, drawn below this decoder's text rows.
+            for (auto meta : _decoder_stack->get_meta_streams(dec->decoder())) {
+                if (!meta->shown() || meta->get_sample_count() == 0)
+                    continue;
+
+                const int meta_height = annotation_height * MetaRowUnits;
+
+                // y is the centre of the next one-unit row, so the centre of
+                // the taller waveform row sits further down.
+                const int meta_y = y + (meta_height - annotation_height) / 2;
+
+                draw_meta_waveform(meta, p, meta_height, left, right,
+                    samples_per_pixel, pixels_offset, meta_y,
+                    start_sample, end_sample, fore, back);
+
+                y += meta_height;
+                _cur_row_headings.push_back(meta->name());
+                _cur_row_units.push_back(MetaRowUnits);
             }
         } else {
             draw_unshown_row(p, y, annotation_height, left, right, L_S(STR_PAGE_DLG, S_ID(IDS_DLG_UNSHOWN), "Unshown"), fore, back);
             y += annotation_height;
             _cur_row_headings.push_back(dec->decoder()->name);
+            _cur_row_units.push_back(1);
         }
     }
 }
@@ -426,6 +455,97 @@ void DecodeTrace::draw_nodetail(QPainter &p,
     
     p.setPen(fore);
     p.drawText(nodetail_rect, Qt::AlignCenter | Qt::AlignVCenter, info);
+}
+
+void DecodeTrace::draw_meta_waveform(pv::data::decode::MetaData *meta, QPainter &p,
+    int h, int left, int right, double samples_per_pixel, double pixels_offset,
+    int y, uint64_t start_sample, uint64_t end_sample, QColor fore, QColor back)
+{
+    using namespace pv::data::decode;
+
+    assert(meta);
+
+    std::vector<MetaSample> samples;
+    meta->get_sample_subset(samples, start_sample, end_sample);
+
+    if (samples.empty())
+        return;
+
+    // Leave a little room above and below so the extremes are not clipped
+    // against the row border.
+    const double padding = h * 0.15;
+    const double top = y - h / 2.0 + padding;
+    const double bottom = y + h / 2.0 - padding;
+
+    double min_value, max_value;
+    if (!MetaData::get_value_range(samples, min_value, max_value))
+        return;
+
+    // Auto-fit the vertical axis to what is on screen. A flat stream would
+    // give a zero-height range, so give it a nominal one and centre it.
+    double range = max_value - min_value;
+    if (range <= 0.0) {
+        range = (max_value != 0.0) ? qAbs(max_value) : 1.0;
+        min_value -= range / 2.0;
+    }
+
+    const double v_scale = (bottom - top) / range;
+
+    // Row baseline and border, so an empty stretch still reads as a row.
+    p.setPen(QPen(fore, 1, Qt::DotLine));
+    p.drawLine(QPointF(left, bottom), QPointF(right, bottom));
+
+    const auto value_to_y = [&](double v) -> double {
+        return bottom - (v - min_value) * v_scale;
+    };
+
+    const auto sample_to_x = [&](uint64_t s) -> double {
+        return s / samples_per_pixel - pixels_offset;
+    };
+
+    QColor curve_colour = get_colour();
+    curve_colour.setAlpha(255);
+
+    QVector<QPointF> points;
+    points.reserve(samples.size() * 2 + 2);
+
+    for (size_t i = 0; i < samples.size(); i++)
+    {
+        const MetaSample &s = samples[i];
+        const double v_y = value_to_y(s.value);
+
+        if (meta->interp() == MetaInterpStep) {
+            // The value holds for the whole span it was measured over.
+            points.push_back(QPointF(sample_to_x(s.start_sample), v_y));
+            points.push_back(QPointF(sample_to_x(s.end_sample), v_y));
+
+            // Vertical connector to the next value.
+            if (i + 1 < samples.size()) {
+                const double next_y = value_to_y(samples[i + 1].value);
+                points.push_back(QPointF(sample_to_x(samples[i + 1].start_sample), v_y));
+                points.push_back(QPointF(sample_to_x(samples[i + 1].start_sample), next_y));
+            }
+        }
+        else {
+            // Linear: one point per measurement, at the middle of its span.
+            const uint64_t mid = s.start_sample + (s.end_sample - s.start_sample) / 2;
+            points.push_back(QPointF(sample_to_x(mid), v_y));
+        }
+    }
+
+    p.setPen(QPen(curve_colour, 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawPolyline(points.data(), points.size());
+
+    // Value range readout, right-aligned so it does not collide with the row
+    // heading drawn on the left by paint_back().
+    p.setPen(fore);
+    const QString range_text = QString("%1 .. %2")
+        .arg(min_value, 0, 'g', 4).arg(max_value, 0, 'g', 4);
+    const QRect text_rect(left, (int)top, right - left - DrawPadding, (int)padding * 2);
+    p.drawText(text_rect, Qt::AlignRight | Qt::AlignTop | Qt::TextDontClip, range_text);
+
+    (void)back;
 }
 
 void DecodeTrace::draw_instant(const pv::data::decode::Annotation &a, QPainter &p,
@@ -587,7 +707,12 @@ int DecodeTrace::rows_size()
                     (*i).second)
                     size++;
             }
-        } 
+
+            for (auto meta : _decoder_stack->get_meta_streams(dec->decoder())) {
+                if (meta->shown() && meta->get_sample_count() > 0)
+                    size += MetaRowUnits;
+            }
+        }
         else {
             size++;
         }
@@ -697,6 +822,13 @@ bool DecodeTrace::create_popup(bool isnew)
             }
 
             dlg.get_cursor_range(_decode_cursor1, _decode_cursor2);
+
+            // Switching a measurement stream to or from a waveform changes
+            // rows_size() without changing any decoder option, so the caller's
+            // re-decode is not triggered. Re-layout here or the new row would
+            // get no vertical slot until something else refreshes the view.
+            if (_view)
+                _view->signals_changed(NULL);
 
             // Reopen the dialog to select the required probes.
             if (ret && _decoder_stack->check_required_probes() == false)

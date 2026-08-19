@@ -98,6 +98,11 @@ DecoderStack::~DecoderStack()
     _rows_gshow.clear();
     _rows_lshow.clear();
     _class_rows.clear();
+
+    for (auto &kv : _meta_streams){
+        delete kv.second;
+    }
+    _meta_streams.clear();
 }
  
 void DecoderStack::add_sub_decoder(decode::Decoder *decoder)
@@ -378,8 +383,18 @@ void DecoderStack::init()
     _snapshot = NULL;
     _result_count = 0;
 
-    for (auto i = _rows.begin();i != _rows.end(); i++) { 
+    for (auto i = _rows.begin();i != _rows.end(); i++) {
         (*i).second->clear();
+    }
+
+    {
+        // Drop the previous run's values but keep the streams themselves, so
+        // that the rows the user switched to waveform stay switched on.
+        std::lock_guard<std::mutex> lock(_meta_mutex);
+
+        for (auto &kv : _meta_streams){
+            kv.second->clear();
+        }
     }
 
     set_mark_index(-1);
@@ -745,9 +760,16 @@ void DecoderStack::execute_decode_stack()
 		g_variant_new_uint64((uint64_t)_samplerate));
 
 	srd_pd_output_callback_add(
-                    session, 
+                    session,
                     SRD_OUTPUT_ANN,
 		            DecoderStack::annotation_callback,
+                    _stask_stauts);
+
+	// Numeric measurements, drawn as waveform rows instead of text.
+	srd_pd_output_callback_add(
+                    session,
+                    SRD_OUTPUT_META,
+		            DecoderStack::meta_callback,
                     _stask_stauts);
 
     char *error = NULL;
@@ -836,11 +858,105 @@ void DecoderStack::annotation_callback(srd_proto_data *pdata, void *self)
         return;
     }
 
-	// Add the annotation 
+	// Add the annotation
     if (!(*row_iter).second->push_annotation(a))
-        d->_no_memory = true; 
+        d->_no_memory = true;
 }
- 
+
+//the decode callback for numeric measurements (SRD_OUTPUT_META)
+void DecoderStack::meta_callback(srd_proto_data *pdata, void *self)
+{
+    assert(pdata);
+    assert(self);
+
+    struct decode_task_status *st = (decode_task_status*)self;
+
+    DecoderStack *const d = st->_decoder;
+    assert(d);
+
+    if (st->_bStop){
+        return;
+    }
+    if (d->_no_memory) {
+        return;
+    }
+
+    assert(pdata->pdo);
+    assert(pdata->pdo->di);
+
+    // convert_meta() leaves this NULL when the decoder registered a meta type
+    // other than int64 or double.
+    GVariant *const gvar = (GVariant*)pdata->data;
+    if (gvar == NULL){
+        return;
+    }
+
+    // The GVariant is unref'd by libsigrokdecode as soon as this returns, so
+    // the value has to be taken now rather than stored.
+    double value;
+
+    if (g_variant_type_equal(pdata->pdo->meta_type, G_VARIANT_TYPE_DOUBLE)){
+        value = g_variant_get_double(gvar);
+    }
+    else if (g_variant_type_equal(pdata->pdo->meta_type, G_VARIANT_TYPE_INT64)){
+        value = (double)g_variant_get_int64(gvar);
+    }
+    else{
+        return;
+    }
+
+    MetaId id;
+    id.decoder = pdata->pdo->di->decoder;
+    id.pdo_id = pdata->pdo->pdo_id;
+
+    MetaData *stream = NULL;
+
+    {
+        std::lock_guard<std::mutex> lock(d->_meta_mutex);
+
+        auto it = d->_meta_streams.find(id);
+
+        if (it == d->_meta_streams.end())
+        {
+            // First value of this run for this output. meta_name points into
+            // the decoder instance, which is freed when the run ends, so it
+            // has to be copied rather than referenced.
+            const QString name = pdata->pdo->meta_name != NULL
+                ? QString::fromUtf8(pdata->pdo->meta_name) : QString();
+            const QString descr = pdata->pdo->meta_descr != NULL
+                ? QString::fromUtf8(pdata->pdo->meta_descr) : QString();
+
+            stream = new MetaData(id, name, descr);
+            if (stream == NULL){
+                d->_no_memory = true;
+                return;
+            }
+            d->_meta_streams[id] = stream;
+        }
+        else{
+            stream = (*it).second;
+        }
+    }
+
+    if (!stream->push_sample(pdata->start_sample, pdata->end_sample, value))
+        d->_no_memory = true;
+}
+
+std::vector<decode::MetaData*> DecoderStack::get_meta_streams(const srd_decoder *dec)
+{
+    std::lock_guard<std::mutex> lock(_meta_mutex);
+
+    std::vector<decode::MetaData*> streams;
+
+    for (auto &kv : _meta_streams)
+    {
+        if (dec == NULL || kv.first.decoder == dec)
+            streams.push_back(kv.second);
+    }
+
+    return streams;
+}
+
 void DecoderStack::frame_ended()
 { 
     _options_changed = true; 

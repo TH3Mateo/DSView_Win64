@@ -1,0 +1,63 @@
+name: Windows (MSYS2 / MinGW-w64)
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  mingw64:
+    name: mingw-w64 x86_64
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSYS2 and dependencies
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+          pacboy: >-
+            toolchain:p
+            cmake:p
+            ninja:p
+            pkgconf:p
+            qt6-base:p
+            qt6-svg:p
+            qt6-tools:p
+            glib2:p
+            zlib:p
+            libusb:p
+            fftw:p
+            boost:p
+            python:p
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Show result
+        run: ls -l build.dir
+
+      - name: Deploy Qt runtime
+        run: |
+          windeployqt6 --release --no-translations build.dir/DSView.exe
+          cp "$MINGW_PREFIX"/bin/lib{glib-2.0-0,gobject-2.0-0,gthread-2.0-0,intl-8,iconv-2,pcre2-8-0,usb-1.0,fftw3-3,winpthread-1,stdc++-6,gcc_s_seh-1,zlib1}.dll build.dir/ 2>/dev/null || true
+          cp "$MINGW_PREFIX"/bin/zlib1.dll build.dir/ 2>/dev/null || true
+          cp "$MINGW_PREFIX"/bin/python3*.dll build.dir/ 2>/dev/null || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSView-windows-x86_64
+          path: build.dir/

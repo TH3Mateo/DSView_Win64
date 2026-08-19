@@ -21,9 +21,11 @@
 
 #include "path.h"
 #ifdef _WIN32
-#include <QTextCodec>
-#include "../log.h"
 #include <string.h>
+#include "../log.h"
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#include <QTextCodec>
+#endif
 #endif
 
 namespace pv{
@@ -49,6 +51,12 @@ namespace path{
         std::string str;
          
 #ifdef _WIN32
+    #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        // On Windows QString::toLocal8Bit() encodes with the system ANSI code
+        // page, which is what QTextCodec("System") did on Qt5.
+        QByteArray str_tmp = path.toLocal8Bit();
+        str = str_tmp.data();
+    #else
         QTextCodec *codec = QTextCodec::codecForName("System");
         if (codec != NULL){
             QByteArray str_tmp = codec->fromUnicode(path);
@@ -57,7 +65,8 @@ namespace path{
         else{
             dsv_err("Error: can't get \"System\" page code");
             str = path.toUtf8().data();
-        }       
+        }
+    #endif
 #else
         str = path.toUtf8().data();        
 #endif

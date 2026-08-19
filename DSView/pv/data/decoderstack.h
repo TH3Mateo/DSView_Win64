@@ -30,7 +30,8 @@
 #include <QString>
 #include <mutex> 
 
-#include "decode/row.h" 
+#include "decode/row.h"
+#include "decode/metadata.h"
 #include "../data/signaldata.h"
 #include "decode/decoderstatus.h"
  
@@ -123,6 +124,17 @@ public:
     void set_rows_gshow(const decode::Row row, bool show);
     void set_rows_lshow(const decode::Row row, bool show);
     bool has_annotations(const decode::Row &row);
+
+    /**
+     * The SRD_OUTPUT_META streams seen so far, in registration order.
+     *
+     * A stream only appears once the decoder has emitted at least one value
+     * for it, because libsigrokdecode creates the outputs at run time from the
+     * decoder's Python start() and offers no way to enumerate them up front.
+     * Pass a decoder to list only that decoder's streams.
+     */
+    std::vector<decode::MetaData*> get_meta_streams(const srd_decoder *dec = NULL);
+
     uint64_t list_annotation_size();
     uint64_t list_annotation_size(uint16_t row_index);
 
@@ -191,6 +203,7 @@ private:
     void decode_data(const uint64_t decode_start, const uint64_t decode_end, srd_session *const session);
 	void execute_decode_stack();
 	static void annotation_callback(srd_proto_data *pdata, void *self);
+	static void meta_callback(srd_proto_data *pdata, void *self);
     void do_decode_work();
   
 signals:
@@ -205,7 +218,13 @@ private:
     std::map<const decode::Row, bool>       _rows_gshow;
     std::map<const decode::Row, bool>       _rows_lshow;
     std::map<std::pair<const srd_decoder*, int>, decode::Row> _class_rows;
-  
+
+    // Numeric measurement streams, created lazily by meta_callback(). Kept
+    // across decode runs so the per-stream display settings survive; only the
+    // samples are dropped in init().
+    std::map<decode::MetaId, decode::MetaData*> _meta_streams;
+    mutable std::mutex _meta_mutex;
+
     SigSession      *_session;
     decode_state    _decode_state;
     volatile bool   _options_changed;

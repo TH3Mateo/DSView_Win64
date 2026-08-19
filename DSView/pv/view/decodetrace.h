@@ -51,6 +51,7 @@ namespace decode {
 class Annotation;
 class Decoder;
 class Row;
+class MetaData;
 }
 }
 
@@ -81,6 +82,10 @@ private:
 
     static const int ControlRectWidth = 5;
     static const int MaxAnnType = 100;
+
+    // A waveform row is taller than a text row, otherwise there is not enough
+    // vertical room for the curve to be readable.
+    static const int MetaRowUnits = 2;
 
     static const QString RegionStart;
     static const QString RegionEnd;
@@ -151,6 +156,17 @@ private:
         double samples_per_pixel, double pixels_offset, int y,
         size_t base_colour, double min_annWidth, QColor fore, QColor back, double &last_x);
 
+    /**
+     * Draws one SRD_OUTPUT_META stream as a waveform row.
+     *
+     * The vertical axis is auto-fitted to the values currently in view, so a
+     * stream is readable whatever unit the decoder measures in.
+     */
+    void draw_meta_waveform(pv::data::decode::MetaData *meta, QPainter &p,
+        int h, int left, int right, double samples_per_pixel,
+        double pixels_offset, int y, uint64_t start_sample,
+        uint64_t end_sample, QColor fore, QColor back);
+
     void draw_nodetail(QPainter &p,
         int text_height, int left, int right, int y,
         size_t base_colour, QColor fore, QColor back);
@@ -191,7 +207,12 @@ private:
 	uint64_t		_decode_cursor1; // the cursor key, sample start index 
 	uint64_t		_decode_cursor2;	 
 
-	std::vector<QString> 	_cur_row_headings; 
+	std::vector<QString> 	_cur_row_headings;
+
+	// Height of each heading's row, in units of _view->get_signalHeight().
+	// Text rows are 1 unit, waveform rows are taller, so the headings cannot
+	// simply be spaced at a fixed pitch.
+	std::vector<int> 	_cur_row_units;
  
 };
 

@@ -25,6 +25,9 @@
 #include "../data/decoderstack.h"
 #include "../data/decode/decoder.h"
 #include "../data/decode/row.h"
+#include "../data/decode/metadata.h"
+#include "../ui/dscombobox.h"
+#include "../ui/langresource.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
@@ -106,7 +109,10 @@ DecoderGroupBox::DecoderGroupBox(data::DecoderStack *decoder_stack,
         _row_num++;
     }
 
-    _layout->addLayout(dec_layout, _row_show_button.size()+1, 0, 1, 3);
+    int grid_row = _row_show_button.size() + 1;
+    add_meta_rows(_widget, font, grid_row, iconPath);
+
+    _layout->addLayout(dec_layout, grid_row, 0, 1, 3);
     _widget->setLayout(_layout);
 
     _content_width = _widget->sizeHint().width();
@@ -155,6 +161,99 @@ void DecoderGroupBox::tog_icon()
             }
         }
     }
+}
+
+void DecoderGroupBox::add_meta_rows(QWidget *parent_widget, QFont font,
+    int &grid_row, const QString &iconPath)
+{
+    using namespace pv::data::decode;
+
+    // These only exist once the decoder has actually run: libsigrokdecode
+    // creates its meta outputs from the decoder's Python start(), so before
+    // the first decode there is nothing to list.
+    _meta_streams = _decoder_stack->get_meta_streams(_dec->decoder());
+
+    if (_meta_streams.empty())
+        return;
+
+    for (size_t i = 0; i < _meta_streams.size(); i++)
+    {
+        MetaData *meta = _meta_streams[i];
+
+        QLabel *lb = new QLabel(meta->name(), parent_widget);
+        lb->setFont(font);
+        lb->setToolTip(meta->descr());
+
+        DsComboBox *interp = new DsComboBox(parent_widget);
+        interp->addItem(L_S(STR_PAGE_DLG, S_ID(IDS_DLG_META_INTERP_STEP), "Step"));
+        interp->addItem(L_S(STR_PAGE_DLG, S_ID(IDS_DLG_META_INTERP_LINEAR), "Linear"));
+        interp->setCurrentIndex(meta->interp() == MetaInterpLinear ? 1 : 0);
+        interp->setProperty("meta_index", (int)i);
+        interp->setEnabled(meta->shown());
+        connect(interp, SIGNAL(currentIndexChanged(int)),
+                this, SLOT(on_meta_interp_changed(int)));
+
+        QPushButton *show_button = new QPushButton(QIcon(meta->shown() ?
+                                                             iconPath+"/shown.svg" :
+                                                             iconPath+"/hidden.svg"),
+                                                   QString(), parent_widget);
+        show_button->setProperty("meta_index", (int)i);
+        show_button->setToolTip(meta->descr());
+        connect(show_button, SIGNAL(clicked()), this, SLOT(tog_meta_icon()));
+
+        _meta_interp_combo.push_back(interp);
+
+        _layout->addWidget(lb, grid_row, 0);
+        _layout->addWidget(interp, grid_row, 1);
+        _layout->addWidget(show_button, grid_row, 2);
+
+        grid_row++;
+        _row_num++;
+    }
+}
+
+void DecoderGroupBox::tog_meta_icon()
+{
+    using namespace pv::data::decode;
+
+    QString iconPath = GetIconPath();
+    QPushButton *sc = dynamic_cast<QPushButton*>(sender());
+    if (sc == NULL)
+        return;
+
+    const int index = sc->property("meta_index").toInt();
+    if (index < 0 || index >= (int)_meta_streams.size())
+        return;
+
+    MetaData *meta = _meta_streams[index];
+    meta->set_shown(!meta->shown());
+
+    sc->setIcon(QIcon(meta->shown() ? iconPath+"/shown.svg" :
+                                      iconPath+"/hidden.svg"));
+
+    // The interpolation choice is meaningless while the row is hidden.
+    if (index < (int)_meta_interp_combo.size())
+        _meta_interp_combo[index]->setEnabled(meta->shown());
+
+    show_hide_row();
+}
+
+void DecoderGroupBox::on_meta_interp_changed(int index)
+{
+    using namespace pv::data::decode;
+
+    QObject *sc = sender();
+    if (sc == NULL)
+        return;
+
+    const int meta_index = sc->property("meta_index").toInt();
+    if (meta_index < 0 || meta_index >= (int)_meta_streams.size())
+        return;
+
+    _meta_streams[meta_index]->set_interp(
+        index == 1 ? MetaInterpLinear : MetaInterpStep);
+
+    show_hide_row();
 }
 
 void DecoderGroupBox::on_del_stack()

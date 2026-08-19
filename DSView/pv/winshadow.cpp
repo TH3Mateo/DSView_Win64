@@ -108,7 +108,7 @@ void WinShadow::hideShadow()
     QWidget::hide();
 }
 
-bool WinShadow::nativeEvent(const QByteArray &eventType, void *message, long *result)
+bool WinShadow::nativeEvent(const QByteArray &eventType, void *message, MESSAGE_RESULT_PTR result)
 {  
     MSG *msg = static_cast<MSG*>(message);
 

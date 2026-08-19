@@ -29,6 +29,17 @@
 
 #define SHADOW_BORDER_WIDTH 11
 
+// The last parameter of QWidget::nativeEvent() changed from "long *" to
+// "qintptr *" in Qt6, so the override has to follow the Qt version.
+#ifndef DSV_MESSAGE_RESULT_PTR_DEFINED
+#define DSV_MESSAGE_RESULT_PTR_DEFINED
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+typedef qintptr *MESSAGE_RESULT_PTR;
+#else
+typedef long *MESSAGE_RESULT_PTR;
+#endif
+#endif
+
 namespace pv {
 
 class IShadowCallback
@@ -69,7 +80,7 @@ private slots:
     void onCheckForeWindow();
 
 private:
-    bool nativeEvent(const QByteArray &eventType, void *message, long *result) override; 
+    bool nativeEvent(const QByteArray &eventType, void *message, MESSAGE_RESULT_PTR result) override; 
     void paintEvent(QPaintEvent *event) override;
  
     QWidget     *m_parent;
